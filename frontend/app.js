@@ -135,7 +135,7 @@
       if (!res.ok) {
         var errData;
         try { errData = await res.json(); } catch (_) { errData = {}; }
-        throw new Error(errData.error || errData.message || 'Request failed (' + res.status + ')');
+        throw new Error(errData.detail || errData.error || errData.message || 'Request failed (' + res.status + ')');
       }
       var data = await res.json();
       return data;
@@ -319,26 +319,31 @@
     var area = document.getElementById('searchResultsArea');
     if (!area) return;
 
-    var results = data.results || data;
-    if (!results || (Array.isArray(results) && results.length === 0)) {
+    // Normalize API response: { countries: [{ country_code, results }] }
+    var grouped = {};
+    if (data.countries && Array.isArray(data.countries)) {
+      data.countries.forEach(function (c) {
+        var cc = c.country_code ? c.country_code.toLowerCase() : 'us';
+        grouped[cc] = c.results || [];
+      });
+    } else if (data.results && Array.isArray(data.results)) {
+      data.results.forEach(function (r) {
+        var cc = (r.country || 'us').toLowerCase();
+        if (!grouped[cc]) grouped[cc] = [];
+        grouped[cc].push(r);
+      });
+    } else if (typeof data === 'object' && !Array.isArray(data)) {
+      grouped = data;
+    }
+
+    var totalResults = Object.keys(grouped).reduce(function (sum, k) { return sum + (grouped[k] || []).length; }, 0);
+    if (totalResults === 0) {
       area.innerHTML = '<div class="empty-state">' +
         '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
         '<p class="empty-state-title">No results found</p>' +
         '<p class="empty-state-text">Try adjusting your search query or adding more countries.</p>' +
       '</div>';
       return;
-    }
-
-    // Normalize: group by country
-    var grouped = {};
-    if (Array.isArray(results)) {
-      results.forEach(function (r) {
-        var cc = r.country || 'us';
-        if (!grouped[cc]) grouped[cc] = [];
-        grouped[cc].push(r);
-      });
-    } else if (typeof results === 'object') {
-      grouped = results;
     }
 
     // Filters bar
@@ -449,12 +454,11 @@
   }
 
   function renderProductCard(item, country) {
-    var store = item.store || item.seller || 'Unknown Store';
-    var rep = isReputable(store);
+    var store = item.store_name || item.store || item.seller || 'Unknown Store';
+    var rep = item.is_reputable || isReputable(store);
     var priceClass = '';
-    // No median to compare against here, just show green
-    var imgHtml = item.image || item.thumbnail
-      ? '<img src="' + escapeHtml(item.image || item.thumbnail) + '" alt="" loading="lazy">'
+    var imgHtml = item.image_url || item.image || item.thumbnail
+      ? '<img src="' + escapeHtml(item.image_url || item.image || item.thumbnail) + '" alt="" loading="lazy">'
       : '<div class="img-placeholder">No Image</div>';
 
     var conditionBadge = '';
@@ -463,7 +467,8 @@
     else if (cond.toLowerCase() === 'refurbished') conditionBadge = '<span class="badge badge-purple">Refurb</span>';
     else conditionBadge = '<span class="badge badge-green">New</span>';
 
-    var link = item.link || item.url || '#';
+    var link = item.url || item.link || item.store_link || item.product_link || '#';
+    var domain = item.store_domain || '';
 
     return '<div class="product-card">' +
       '<div class="product-card-img">' + imgHtml + '</div>' +
@@ -472,6 +477,7 @@
         '<div class="product-card-store">' +
           escapeHtml(store) +
           (rep ? ' <span class="verified-badge" title="Reputable store">\u2713</span>' : '') +
+          (domain && domain !== 'google.com' ? ' <span class="text-sm text-secondary">(' + escapeHtml(domain) + ')</span>' : '') +
         '</div>' +
         '<div class="product-card-price ' + priceClass + '">' + formatPrice(item.price, country.currency) + '</div>' +
         '<div class="product-card-meta">' +
@@ -488,7 +494,7 @@
 
   async function monitorProduct(query, countries) {
     try {
-      await api('POST', '/monitors', { query: query, countries: countries });
+      await api('POST', '/monitors', { name: query, query: query, countries: countries });
       showToast('Product is now being monitored', 'success');
     } catch (_) { /* handled */ }
   }
@@ -537,23 +543,32 @@
     }
 
     grid.innerHTML = '<div class="grid-auto">' + state.monitors.map(function (m) {
-      var statusBadge = m.status === 'active'
+      // m is a product with nested monitors array
+      var monitors = m.monitors || [];
+      var allEnabled = monitors.every(function (mon) { return mon.enabled; });
+      var anyEnabled = monitors.some(function (mon) { return mon.enabled; });
+      var statusText = allEnabled ? 'active' : (anyEnabled ? 'partial' : 'paused');
+      var statusBadge = allEnabled
         ? '<span class="badge badge-green">Active</span>'
-        : '<span class="badge badge-yellow">Paused</span>';
+        : (anyEnabled ? '<span class="badge badge-yellow">Partial</span>' : '<span class="badge badge-yellow">Paused</span>');
 
-      var countriesHtml = (m.countries || []).map(function (cc) {
-        var c = getCountry(cc);
+      var countriesHtml = monitors.map(function (mon) {
+        var c = getCountry(mon.country_code);
         return '<span class="badge badge-neutral" title="' + escapeHtml(c.name) + '">' + c.flag + '</span>';
       }).join(' ');
 
-      var prices = (m.current_prices || []);
+      // Extract lowest price per country from latest_prices
       var statsHtml = '';
-      if (prices.length > 0) {
-        statsHtml = prices.map(function (p) {
-          var c = getCountry(p.country);
+      var hasAnyPrices = monitors.some(function (mon) { return (mon.latest_prices || []).length > 0; });
+      if (hasAnyPrices) {
+        statsHtml = monitors.filter(function (mon) { return (mon.latest_prices || []).length > 0; }).map(function (mon) {
+          var c = getCountry(mon.country_code);
+          var prices = mon.latest_prices || [];
+          var lowest = prices.reduce(function (min, p) { return p.price < min ? p.price : min; }, Infinity);
+          var cur = prices.length > 0 ? prices[0].currency : c.currency;
           return '<div class="monitor-stat">' +
             '<div class="monitor-stat-label">' + c.flag + ' Lowest</div>' +
-            '<div class="monitor-stat-value price-low">' + formatPrice(p.price, c.currency) + '</div>' +
+            '<div class="monitor-stat-value price-low">' + formatPrice(lowest, cur) + '</div>' +
           '</div>';
         }).join('');
       } else {
@@ -562,6 +577,15 @@
           '<div class="monitor-stat-value text-secondary text-sm">Awaiting first check</div>' +
         '</div>';
       }
+
+      // Find the latest last_checked across all monitors
+      var lastChecked = monitors.reduce(function (latest, mon) {
+        if (mon.last_checked && (!latest || mon.last_checked > latest)) return mon.last_checked;
+        return latest;
+      }, null) || m.updated_at;
+
+      // First monitor ID for toggle (toggle all monitors of this product)
+      var firstMonitorId = monitors.length > 0 ? monitors[0].id : m.id;
 
       return '<div class="monitor-card">' +
         '<div class="monitor-card-header">' +
@@ -572,13 +596,13 @@
           statusBadge +
         '</div>' +
         '<div class="monitor-card-stats">' + statsHtml + '</div>' +
-        '<div class="text-xs text-tertiary mb-8">Last checked: ' + relativeTime(m.last_check || m.updated_at) + '</div>' +
+        '<div class="text-xs text-tertiary mb-8">Last checked: ' + relativeTime(lastChecked) + '</div>' +
         '<div class="monitor-card-actions">' +
           '<button class="btn btn-sm btn-secondary monitor-view-btn" data-id="' + m.id + '">View Details</button>' +
-          '<button class="btn btn-sm btn-ghost monitor-toggle-btn" data-id="' + m.id + '" data-status="' + (m.status || 'active') + '">' +
-            (m.status === 'active' ? 'Pause' : 'Resume') +
+          '<button class="btn btn-sm btn-ghost monitor-toggle-btn" data-id="' + firstMonitorId + '" data-status="' + statusText + '">' +
+            (allEnabled ? 'Pause' : 'Resume') +
           '</button>' +
-          '<button class="btn btn-sm btn-ghost monitor-alert-btn" data-id="' + m.id + '">Add Alert</button>' +
+          '<button class="btn btn-sm btn-ghost monitor-alert-btn" data-id="' + firstMonitorId + '">Add Alert</button>' +
           '<button class="btn btn-sm btn-danger monitor-delete-btn" data-id="' + m.id + '">Delete</button>' +
         '</div>' +
       '</div>';
@@ -605,8 +629,9 @@
   async function toggleMonitor(id, currentStatus) {
     var newStatus = currentStatus === 'active' ? 'paused' : 'active';
     try {
-      await api('PATCH', '/monitors/' + id, { status: newStatus });
-      showToast('Monitor ' + (newStatus === 'active' ? 'resumed' : 'paused'), 'success');
+      var shouldEnable = currentStatus !== 'active';
+      await api('PATCH', '/monitors/' + id + '/toggle', { enabled: shouldEnable });
+      showToast('Monitor ' + (shouldEnable ? 'resumed' : 'paused'), 'success');
       renderMonitors();
     } catch (_) { /* handled */ }
   }
@@ -664,7 +689,7 @@
       checked.forEach(function (cb) { countries.push(cb.value); });
       if (countries.length === 0) { showToast('Select at least one country', 'warning'); return; }
       try {
-        await api('POST', '/monitors', { query: q, countries: countries });
+        await api('POST', '/monitors', { name: q, query: q, countries: countries });
         showToast('Monitor added successfully', 'success');
         document.body.removeChild(overlay);
         renderMonitors();
@@ -707,7 +732,7 @@
       var method = document.getElementById('alertMethod').value;
       if (isNaN(price) || price <= 0) { showToast('Enter a valid price', 'warning'); return; }
       try {
-        await api('POST', '/monitors/' + monitorId + '/alerts', { target_price: price, method: method });
+        await api('POST', '/monitors/' + monitorId + '/alerts', { alert_type: 'below_threshold', threshold_value: price });
         showToast('Price alert set', 'success');
         document.body.removeChild(overlay);
       } catch (_) { /* handled */ }
@@ -746,16 +771,17 @@
     var container = document.getElementById('productDetailContent');
     if (!container) return;
 
-    var product = data.monitor || data;
-    var countries = product.countries || ['us'];
-    var history = data.history || product.history || [];
-    var currentPrices = data.current_prices || product.current_prices || [];
+    var product = data;
+    var monitors = product.monitors || [];
+    var countries = monitors.map(function (mon) { return mon.country_code ? mon.country_code.toLowerCase() : 'us'; });
+    if (countries.length === 0) countries = ['us'];
+    var allEnabled = monitors.every(function (mon) { return mon.enabled; });
 
     // Page header
     var headerHtml = '<div class="page-header">' +
       '<h1 class="page-title">' + escapeHtml(product.query || product.name || 'Product') + '</h1>' +
-      '<p class="page-subtitle">Monitor ID: ' + escapeHtml(String(id)) + ' &middot; Status: ' +
-        (product.status === 'active'
+      '<p class="page-subtitle">Product ID: ' + escapeHtml(String(id)) + ' &middot; Status: ' +
+        (allEnabled
           ? '<span class="badge badge-green">Active</span>'
           : '<span class="badge badge-yellow">Paused</span>') +
       '</p>' +
@@ -789,6 +815,35 @@
     '</div>';
 
     container.innerHTML = headerHtml + tabsHtml + statsHtml + chartHtml + tableHtml;
+
+    // Build currentPrices and history from monitors data
+    var currentPrices = [];
+    var history = [];
+    monitors.forEach(function (mon) {
+      var cc = mon.country_code ? mon.country_code.toLowerCase() : 'us';
+      (mon.latest_prices || []).forEach(function (p) {
+        currentPrices.push({
+          country: cc,
+          store: p.store_name,
+          store_name: p.store_name,
+          price: p.price,
+          currency: p.currency,
+          condition: p.condition,
+          in_stock: p.in_stock !== false,
+          is_reputable: p.is_reputable,
+          link: p.url,
+          date: p.scraped_at,
+          timestamp: p.scraped_at
+        });
+        history.push({
+          country: cc,
+          store: p.store_name,
+          price: p.price,
+          date: p.scraped_at,
+          timestamp: p.scraped_at
+        });
+      });
+    });
 
     // Initialize with first country
     var activeCountry = countries[0];
@@ -843,16 +898,17 @@
     var tbody = document.getElementById('pricesTableBody');
     if (tbody) {
       tbody.innerHTML = countryPrices.map(function (p) {
-        var rep = isReputable(p.store || '');
+        var storeName = p.store_name || p.store || 'Unknown';
+        var rep = p.is_reputable || isReputable(storeName);
         var priceClass = p.price <= min * 1.05 ? 'price-low' : (p.price >= max * 0.95 ? 'price-high' : '');
         return '<tr>' +
-          '<td class="flex-center">' + escapeHtml(p.store || 'Unknown') +
+          '<td class="flex-center">' + escapeHtml(storeName) +
             (rep ? ' <span class="verified-badge" title="Reputable">\u2713</span>' : '') + '</td>' +
           '<td class="font-bold ' + priceClass + '">' + formatPrice(p.price, c.currency) + '</td>' +
           '<td>' + c.currency + '</td>' +
           '<td>' + (p.condition || 'New') + '</td>' +
           '<td>' + (p.in_stock !== false ? '<span class="badge badge-green">Yes</span>' : '<span class="badge badge-red">No</span>') + '</td>' +
-          '<td><a href="' + escapeHtml(p.link || '#') + '" target="_blank" rel="noopener" class="btn btn-sm btn-ghost">Visit</a></td>' +
+          '<td><a href="' + escapeHtml(p.link || p.url || '#') + '" target="_blank" rel="noopener" class="btn btn-sm btn-ghost">Visit</a></td>' +
         '</tr>';
       }).join('');
     }
