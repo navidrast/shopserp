@@ -7,7 +7,7 @@ located at the project root.
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,6 +50,21 @@ class Settings(BaseSettings):
 
     # ── Logging ───────────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"
+
+    @field_validator("DEFAULT_COUNTRIES", mode="before")
+    @classmethod
+    def parse_countries(cls, v: object) -> list[str]:
+        if isinstance(v, str):
+            return [c.strip() for c in v.split(",") if c.strip()]
+        return v  # type: ignore[return-value]
+
+    @field_validator("PROXY_URL", "ALERT_WEBHOOK_URL", "SECRET_KEY",
+                     "SERPER_API_KEY", "SERPAPI_KEY", mode="before")
+    @classmethod
+    def empty_str_to_none(cls, v: object) -> object:
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
 
 
 settings = Settings()
