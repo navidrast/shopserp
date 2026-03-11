@@ -193,56 +193,98 @@ class GoogleShoppingScraper:
         return COUNTRY_MAP["US"]
 
     async def _fetch_with_playwright(self, url: str, country_cfg: CountryConfig) -> str:
-        """Fetch a URL using headless Chromium, returning fully rendered HTML."""
+        """Fetch a URL using headless Chromium with stealth, returning fully rendered HTML."""
         browser = await _get_browser()
         ua = get_random_ua()
 
         context = await browser.new_context(
             user_agent=ua,
-            locale=country_cfg.hl,
+            locale=f"{country_cfg.hl}-{country_cfg.gl.upper()}",
+            timezone_id="America/New_York",
+            viewport={"width": 1920, "height": 1080},
+            screen={"width": 1920, "height": 1080},
             extra_http_headers={
                 "Accept-Language": f"{country_cfg.hl},en;q=0.9",
+                "DNT": "1",
             },
             java_script_enabled=True,
             bypass_csp=True,
         )
+
         # Set consent cookies to bypass GDPR banners
         await context.add_cookies([
-            {"name": "CONSENT", "value": "YES+", "domain": ".google.com", "path": "/"},
+            {"name": "CONSENT", "value": "YES+cb.20231231-04-p0.en+FX+130", "domain": ".google.com", "path": "/"},
             {"name": "SOCS", "value": "CAESEwgDEgk2NjMxNTcxMjAaAmVuIAEaBgiA_LyaBg", "domain": ".google.com", "path": "/"},
+            {"name": "AEC", "value": "AVYB7crSampleCookieValue1234567890abcdef", "domain": ".google.com", "path": "/"},
         ])
 
         page = await context.new_page()
+
+        # Stealth: mask webdriver detection
+        await page.add_init_script("""
+            // Override navigator.webdriver
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            // Override chrome.runtime
+            window.chrome = { runtime: {} };
+            // Override permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) =>
+                parameters.name === 'notifications'
+                    ? Promise.resolve({ state: Notification.permission })
+                    : originalQuery(parameters);
+            // Override plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+            // Override languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
+        """)
 
         try:
             self._stats.total_requests += 1
             logger.info("Playwright fetching: %s", url)
 
-            response = await page.goto(url, wait_until="networkidle", timeout=self._timeout * 1000)
+            # First visit google.com to establish session
+            await page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=15000)
+            await page.wait_for_timeout(random.randint(500, 1500))
+
+            # Now navigate to shopping
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=self._timeout * 1000)
 
             if response and response.status == 429:
                 self._stats.rate_limited += 1
                 raise RateLimitError("Google returned 429 (rate limited)")
 
-            # Wait for shopping results to appear — try multiple selectors
+            # Wait for shopping results to appear
             try:
                 await page.wait_for_selector(
                     "div[data-docid], .sh-dgr__content, .sh-pr__product-results, "
-                    "[data-sh-sr], .xcR77, div.i0X6df, div.KZmu8e",
-                    timeout=8000,
+                    "[data-sh-sr], .xcR77, div.i0X6df, div.KZmu8e, "
+                    "div[data-hveid], div[jscontroller]",
+                    timeout=10000,
                 )
             except Exception:
-                # Results may have loaded under a different selector, continue
                 logger.debug("No known product selector found, extracting HTML anyway")
 
-            # Extra wait for dynamic content
-            await page.wait_for_timeout(1500)
+            # Wait for dynamic content
+            await page.wait_for_timeout(2000)
+
+            # Scroll down to trigger lazy loading
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+            await page.wait_for_timeout(1000)
 
             html = await page.content()
 
             if self._detect_captcha(html):
                 self._stats.captcha_blocked += 1
-                raise CaptchaError("Google returned a CAPTCHA challenge")
+                # Save HTML for debugging
+                logger.error("CAPTCHA detected. HTML length: %d", len(html))
+                raise CaptchaError(
+                    "Google returned a CAPTCHA challenge. "
+                    "Configure a residential proxy via PROXY_URL in .env"
+                )
 
             self._stats.successful += 1
             logger.info("Playwright got %d bytes of HTML", len(html))

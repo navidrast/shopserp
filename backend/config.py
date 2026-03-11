@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     PROXY_URL: str | None = None
     PROXY_ROTATION_ENABLED: bool = False
 
+    # ── Search API (optional, bypasses direct scraping) ───────────────
+    # Set one of these for reliable results without a proxy:
+    #   SERPER_API_KEY from https://serper.dev (2500 free searches)
+    #   SERPAPI_KEY from https://serpapi.com
+    SERPER_API_KEY: str | None = None
+    SERPAPI_KEY: str | None = None
+
     # ── Geo / Locale ──────────────────────────────────────────────────
     DEFAULT_COUNTRIES: list[str] = Field(default_factory=lambda: ["US"])
 
