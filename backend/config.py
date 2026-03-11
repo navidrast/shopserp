@@ -7,7 +7,7 @@ located at the project root.
 
 from __future__ import annotations
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     SERPAPI_KEY: str | None = None
 
     # ── Geo / Locale ──────────────────────────────────────────────────
-    DEFAULT_COUNTRIES: list[str] = Field(default_factory=lambda: ["US"])
+    DEFAULT_COUNTRIES: str = "US"
 
     # ── Alerts ────────────────────────────────────────────────────────
     ALERT_WEBHOOK_URL: str | None = None
@@ -51,12 +51,9 @@ class Settings(BaseSettings):
     # ── Logging ───────────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"
 
-    @field_validator("DEFAULT_COUNTRIES", mode="before")
-    @classmethod
-    def parse_countries(cls, v: object) -> list[str]:
-        if isinstance(v, str):
-            return [c.strip() for c in v.split(",") if c.strip()]
-        return v  # type: ignore[return-value]
+    @property
+    def default_countries_list(self) -> list[str]:
+        return [c.strip() for c in self.DEFAULT_COUNTRIES.split(",") if c.strip()]
 
     @field_validator("PROXY_URL", "ALERT_WEBHOOK_URL", "SECRET_KEY",
                      "SERPER_API_KEY", "SERPAPI_KEY", mode="before")

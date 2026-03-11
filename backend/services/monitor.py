@@ -69,7 +69,7 @@ class MonitorService:
             cc.upper() for cc in countries if cc.upper() in COUNTRY_INFO
         ]
         if not valid_countries:
-            valid_countries = settings.DEFAULT_COUNTRIES
+            valid_countries = settings.default_countries_list
 
         for cc in valid_countries:
             monitor = Monitor(

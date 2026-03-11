@@ -46,7 +46,7 @@ class SearchService:
         max_results: int = 100,
     ) -> dict[str, list[dict[str, Any]]]:
         if not countries:
-            countries = settings.DEFAULT_COUNTRIES
+            countries = settings.default_countries_list
 
         valid_countries = [
             cc.upper() for cc in countries if cc.upper() in COUNTRY_INFO
