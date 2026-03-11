@@ -1,0 +1,17 @@
+services:
+  shopserp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shopserp
+    ports:
+      - "8888:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
