@@ -144,3 +144,22 @@ class PriceAlert(Base):
 
     def __repr__(self) -> str:
         return f"<PriceAlert id={self.id} type={self.alert_type!r}>"
+
+
+class CustomStore(Base):
+    __tablename__ = "custom_stores"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    domain: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
+    aliases: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    category: Mapped[str] = mapped_column(String(64), default="marketplace", nullable=False)
+    tier: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    country_codes: Mapped[str] = mapped_column(String(256), default="US", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<CustomStore id={self.id} name={self.name!r} domain={self.domain!r}>"

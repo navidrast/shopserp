@@ -209,5 +209,44 @@ class ErrorResponse(BaseModel):
     detail: str
 
 
+# ─── Custom Stores ──────────────────────────────────────────────────────────
+
+
+class CustomStoreCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=256)
+    domain: str = Field(..., min_length=3, max_length=256)
+    aliases: list[str] = Field(default_factory=list)
+    category: str = Field(default="marketplace", max_length=64)
+    tier: int = Field(default=2, ge=1, le=3)
+    country_codes: list[str] = Field(default_factory=lambda: ["US"])
+
+
+class CustomStoreResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    domain: str
+    aliases: str | None = None
+    category: str
+    tier: int
+    country_codes: str
+    is_active: bool
+    created_at: datetime
+
+
+# ─── Store Reputation ──────────────────────────────────────────────────────
+
+
+class StoreReputationResponse(BaseModel):
+    domain: str | None = None
+    name: str | None = None
+    country_code: str | None = None
+    is_reputable: bool = False
+    store_name: str | None = None
+    tier: int | None = None
+    category: str | None = None
+
+
 # Forward-ref rebuild so ProductResponse can reference MonitorResponse.
 ProductResponse.model_rebuild()

@@ -60,6 +60,16 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
     logger.info("Database ready")
 
+    # Load custom stores into the in-memory registry
+    try:
+        from backend.database import async_session_factory
+        from backend.services.custom_stores import load_into_registry
+        async with async_session_factory() as session:
+            count = await load_into_registry(session)
+            logger.info("Loaded %d custom stores", count)
+    except Exception:
+        logger.exception("Failed to load custom stores")
+
     _start_scheduler()
 
     yield
@@ -115,6 +125,14 @@ for _module_path, _attr in _router_modules:
             logger.info("Registered router from %s", _module_path)
     except ModuleNotFoundError:
         logger.debug("Router module %s not yet implemented, skipping", _module_path)
+
+# ── External API v1 (authenticated) ─────────────────────────────────────────
+try:
+    from backend.routers.external import router as external_router
+    app.include_router(external_router)
+    logger.info("Registered external API v1 router")
+except Exception:
+    logger.exception("Failed to register external API v1 router")
 
 # ── Health check ──────────────────────────────────────────────────────────────
 

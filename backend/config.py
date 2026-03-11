@@ -47,6 +47,8 @@ class Settings(BaseSettings):
 
     # ── Auth ──────────────────────────────────────────────────────────
     SECRET_KEY: str | None = None
+    # Comma-separated name:key pairs, e.g. "returnpilot:sk-abc123,other:sk-xyz"
+    API_KEYS: str | None = None
 
     # ── Logging ───────────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"
@@ -56,7 +58,7 @@ class Settings(BaseSettings):
         return [c.strip() for c in self.DEFAULT_COUNTRIES.split(",") if c.strip()]
 
     @field_validator("PROXY_URL", "ALERT_WEBHOOK_URL", "SECRET_KEY",
-                     "SERPER_API_KEY", "SERPAPI_KEY", mode="before")
+                     "SERPER_API_KEY", "SERPAPI_KEY", "API_KEYS", mode="before")
     @classmethod
     def empty_str_to_none(cls, v: object) -> object:
         if isinstance(v, str) and v.strip() == "":

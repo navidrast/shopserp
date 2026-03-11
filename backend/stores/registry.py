@@ -2051,6 +2051,49 @@ def _build_indexes() -> None:
 _build_indexes()
 
 # ---------------------------------------------------------------------------
+# Custom store registration (in-memory overlay)
+# ---------------------------------------------------------------------------
+
+_CUSTOM_DOMAINS: dict[str, tuple[str, str]] = {}  # domain -> (store_name, country_code)
+_CUSTOM_NAMES: dict[str, str] = {}  # lowercase name -> domain
+
+
+def register_custom_store(
+    name: str,
+    domain: str,
+    aliases: list[str] | None = None,
+    category: str = "marketplace",
+    tier: int = 2,
+    country_codes: list[str] | None = None,
+) -> None:
+    """Register a custom store into the in-memory index."""
+    domain_lower = domain.lower().removeprefix("www.")
+    countries = country_codes or ["US"]
+
+    for cc in countries:
+        _CUSTOM_DOMAINS[domain_lower] = (name, cc.upper())
+    for alias in (aliases or []):
+        alias_lower = alias.lower().removeprefix("www.")
+        for cc in countries:
+            _CUSTOM_DOMAINS[alias_lower] = (name, cc.upper())
+
+    _CUSTOM_NAMES[name.lower()] = domain_lower
+
+
+def unregister_custom_store(domain: str) -> None:
+    """Remove a custom store from the in-memory index."""
+    domain_lower = domain.lower().removeprefix("www.")
+    entry = _CUSTOM_DOMAINS.pop(domain_lower, None)
+    if entry:
+        name = entry[0]
+        _CUSTOM_NAMES.pop(name.lower(), None)
+    # Also remove any aliases pointing to the same store
+    to_remove = [d for d, (n, _) in _CUSTOM_DOMAINS.items() if n == (entry[0] if entry else "")]
+    for d in to_remove:
+        _CUSTOM_DOMAINS.pop(d, None)
+
+
+# ---------------------------------------------------------------------------
 # Public helper functions
 # ---------------------------------------------------------------------------
 
@@ -2058,20 +2101,31 @@ _build_indexes()
 def get_stores_for_country(country_code: str) -> list[StoreInfo]:
     """Return all registered stores for a given 2-letter country code.
 
+    Includes both built-in and custom-registered stores.
+
     Args:
         country_code: ISO 3166-1 alpha-2 country code (e.g., "US", "AU").
 
     Returns:
         List of StoreInfo objects for that country, or empty list if unknown.
     """
-    return COUNTRY_STORES.get(country_code.upper(), [])
+    cc = country_code.upper()
+    result = list(COUNTRY_STORES.get(cc, []))
+    # Append custom stores registered for this country
+    seen_domains = {s.domain for s in result}
+    for domain, (name, store_cc) in _CUSTOM_DOMAINS.items():
+        if store_cc == cc and domain not in seen_domains:
+            result.append(StoreInfo(name=name, domain=domain))
+            seen_domains.add(domain)
+    return result
 
 
 def is_reputable_store(domain: str, country_code: str) -> bool:
     """Check whether a domain belongs to a reputable store in a given country.
 
     The check is performed against both primary domains and aliases for the
-    specified country. The match is case-insensitive.
+    specified country, as well as custom-registered stores. The match is
+    case-insensitive.
 
     Args:
         domain: Domain to check (e.g., "amazon.com.au").
@@ -2086,10 +2140,13 @@ def is_reputable_store(domain: str, country_code: str) -> bool:
     for store in stores:
         if store.domain == domain_lower:
             return True
-        # Also check with www. stripped from aliases
         for alias in store.aliases:
             if alias.lower().removeprefix("www.") == domain_lower:
                 return True
+    # Check custom stores
+    custom = _CUSTOM_DOMAINS.get(domain_lower)
+    if custom and custom[1] == country_upper:
+        return True
     return False
 
 
@@ -2097,7 +2154,7 @@ def identify_store(domain: str) -> tuple[str, bool]:
     """Identify a store by its domain across all countries.
 
     Looks up the domain (and its ``www.``-stripped variant) in the global
-    index of all registered domains.
+    index of all registered domains and custom stores.
 
     Args:
         domain: Domain to identify (e.g., "jbhifi.com.au").
@@ -2117,6 +2174,11 @@ def identify_store(domain: str) -> tuple[str, bool]:
         entry = _DOMAIN_INDEX.get(stripped)
         if entry is not None:
             return entry[0], True
+
+    # Check custom stores
+    custom = _CUSTOM_DOMAINS.get(stripped if stripped != domain_lower else domain_lower)
+    if custom is not None:
+        return custom[0], True
 
     return "Unknown", False
 
@@ -2138,6 +2200,12 @@ def is_reputable_store_by_name(store_name: str, country_code: str) -> bool:
     stores = COUNTRY_STORES.get(country_upper, [])
     for store in stores:
         if store.name.lower() == name_lower:
+            return True
+    # Check custom stores
+    if name_lower in _CUSTOM_NAMES:
+        domain = _CUSTOM_NAMES[name_lower]
+        custom = _CUSTOM_DOMAINS.get(domain)
+        if custom and custom[1] == country_upper:
             return True
     return False
 
