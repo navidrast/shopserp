@@ -2121,6 +2121,32 @@ def identify_store(domain: str) -> tuple[str, bool]:
     return "Unknown", False
 
 
+# ── Name-based index (for API results that only provide store name) ─────────
+
+_NAME_INDEX: dict[str, str] = {}  # lowercase name -> primary domain
+for _code, _stores in COUNTRY_STORES.items():
+    for _s in _stores:
+        _name_lower = _s.name.lower()
+        if _name_lower not in _NAME_INDEX:
+            _NAME_INDEX[_name_lower] = _s.domain
+
+
+def is_reputable_store_by_name(store_name: str, country_code: str) -> bool:
+    """Check if a store name matches a reputable store in the given country."""
+    name_lower = store_name.lower().strip()
+    country_upper = country_code.upper()
+    stores = COUNTRY_STORES.get(country_upper, [])
+    for store in stores:
+        if store.name.lower() == name_lower:
+            return True
+    return False
+
+
+def find_domain_by_store_name(store_name: str) -> str | None:
+    """Look up a store's primary domain by its display name."""
+    return _NAME_INDEX.get(store_name.lower().strip())
+
+
 def get_supported_countries() -> list[dict[str, str | int]]:
     """Return metadata for all supported countries.
 

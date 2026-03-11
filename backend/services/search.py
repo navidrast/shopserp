@@ -17,6 +17,8 @@ from backend.config import settings
 from backend.stores.registry import (
     COUNTRY_INFO,
     is_reputable_store,
+    is_reputable_store_by_name,
+    find_domain_by_store_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,7 +99,16 @@ class SearchService:
         tagged: list[dict[str, Any]] = []
         for item in raw_results:
             domain = item.get("store_domain", "")
-            item["is_reputable"] = is_reputable_store(domain, country_code)
+            store_name = item.get("store_name", "")
+            reputable = is_reputable_store(domain, country_code)
+            # Fallback: match by store name (Serper returns google.com redirect links)
+            if not reputable and store_name:
+                reputable = is_reputable_store_by_name(store_name, country_code)
+                if reputable and (not domain or domain == "google.com"):
+                    found_domain = find_domain_by_store_name(store_name)
+                    if found_domain:
+                        item["store_domain"] = found_domain
+            item["is_reputable"] = reputable
             tagged.append(item)
 
         logger.info(
