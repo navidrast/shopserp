@@ -197,11 +197,17 @@ class GoogleShoppingScraper:
             )
 
             try:
+                _http2 = False
+                try:
+                    import h2  # noqa: F401
+                    _http2 = True
+                except ImportError:
+                    pass
                 async with httpx.AsyncClient(
                     proxy=proxy,
                     timeout=httpx.Timeout(self._timeout),
                     follow_redirects=True,
-                    http2=True,
+                    http2=_http2,
                 ) as client:
                     response = await client.get(url, headers=headers)
 
