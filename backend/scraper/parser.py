@@ -303,6 +303,179 @@ def _strategy_generic_divs(soup: BeautifulSoup, country_code: str) -> list[dict[
     return results
 
 
+def _strategy_rendered_shopping(soup: BeautifulSoup, country_code: str) -> list[dict[str, Any]]:
+    """Parse Playwright-rendered Google Shopping page (udm=28 format).
+
+    After JS rendering, product cards contain visible text with prices,
+    store names, and product titles in aria-labels and standard elements.
+    """
+    results: list[dict[str, Any]] = []
+
+    # Strategy A: Look for product cards with aria-label containing price info
+    # Google Shopping rendered cards often have aria-label on the outer div
+    for card in soup.select("[data-docid]"):
+        result = _extract_from_card(card, country_code)
+        if result.get("title"):
+            results.append(result)
+
+    if results:
+        return results
+
+    # Strategy B: Find product links to Google Shopping product pages
+    product_links = soup.select("a[href*='/shopping/product/'], a[href*='shopping/product']")
+    seen: set[str] = set()
+    for link in product_links:
+        href = link.get("href", "")
+        if href in seen:
+            continue
+        seen.add(href)
+
+        # Walk up to find the containing card
+        card = link.parent
+        for _ in range(5):
+            if card and card.parent:
+                card = card.parent
+                # Stop at reasonable card boundary
+                card_classes = " ".join(card.get("class", []))
+                if any(c in card_classes for c in ("sh-dgr", "sh-dlr", "KZmu8e", "i0X6df")):
+                    break
+            else:
+                break
+
+        if card:
+            result = _extract_from_card(card, country_code)
+            if result.get("title"):
+                results.append(result)
+
+    if results:
+        return results
+
+    # Strategy C: Regex-based extraction from rendered text
+    # Find all elements that look like product cards by content patterns
+    # Look for elements containing a price pattern followed by a store name
+    price_pattern = re.compile(
+        r'[\$\€\£\¥A\$]?\s*\d[\d,]*\.?\d*'
+    )
+
+    for h3 in soup.find_all(["h3", "h4", "div[role='heading']"]):
+        title = _safe_text(h3)
+        if not title or len(title) < 3:
+            continue
+
+        # Look for price near this title (within parent/sibling elements)
+        container = h3.parent
+        if container:
+            container = container.parent or container
+
+        if not container:
+            continue
+
+        container_text = container.get_text(" ", strip=True)
+        price_match = price_pattern.search(container_text)
+        if not price_match:
+            continue
+
+        price, currency = _parse_price(price_match.group(), country_code)
+        if price is None or price <= 0:
+            continue
+
+        # Try to find store name
+        store_name = None
+        for store_sel in (".aULzUe", ".IuHnof", ".E5ocAb", ".zPEcBd"):
+            store_tag = container.select_one(store_sel)
+            if store_tag:
+                store_name = _safe_text(store_tag)
+                break
+
+        # Find a link
+        link_tag = container.select_one("a[href]")
+        raw_href = _safe_attr(link_tag, "href")
+        product_link = _extract_google_redirect_url(raw_href) or raw_href
+
+        # Image
+        img_tag = container.select_one("img[src]")
+        image_url = _safe_attr(img_tag, "src") or _safe_attr(img_tag, "data-src")
+
+        results.append({
+            "title": title,
+            "price": price,
+            "currency": currency,
+            "original_price": None,
+            "store_name": store_name,
+            "store_link": None,
+            "store_domain": _extract_domain(product_link),
+            "product_link": product_link,
+            "image_url": image_url,
+            "shipping": None,
+            "condition": None,
+            "rating": None,
+            "review_count": None,
+        })
+
+    return results
+
+
+def _strategy_aria_labels(soup: BeautifulSoup, country_code: str) -> list[dict[str, Any]]:
+    """Extract product data from aria-label attributes on cards.
+
+    Rendered Google Shopping cards often have descriptive aria-labels like:
+    'PlayStation 5 Console, $499.99, from Best Buy, 4.5 stars'
+    """
+    results: list[dict[str, Any]] = []
+    price_re = re.compile(r'[\$\€\£\¥]\s*[\d,]+\.?\d*')
+
+    for el in soup.find_all(attrs={"aria-label": True}):
+        label = el.get("aria-label", "")
+        if not label or len(label) < 10:
+            continue
+
+        # Must contain a price
+        pm = price_re.search(label)
+        if not pm:
+            continue
+
+        price, currency = _parse_price(pm.group(), country_code)
+        if not price or price <= 0:
+            continue
+
+        # Split label into parts (usually comma-separated)
+        parts = [p.strip() for p in label.split(",")]
+        title = parts[0] if parts else None
+
+        store_name = None
+        for part in parts:
+            if part.lower().startswith("from "):
+                store_name = part[5:].strip()
+                break
+
+        # Get link
+        link_tag = el if el.name == "a" else el.select_one("a[href]")
+        raw_href = _safe_attr(link_tag, "href") if link_tag else None
+        product_link = _extract_google_redirect_url(raw_href) or raw_href
+
+        img_tag = el.select_one("img[src]")
+        image_url = _safe_attr(img_tag, "src") if img_tag else None
+
+        if title:
+            results.append({
+                "title": title,
+                "price": price,
+                "currency": currency,
+                "original_price": None,
+                "store_name": store_name,
+                "store_link": None,
+                "store_domain": _extract_domain(product_link),
+                "product_link": product_link,
+                "image_url": image_url,
+                "shipping": None,
+                "condition": None,
+                "rating": None,
+                "review_count": None,
+            })
+
+    return results
+
+
 def _extract_from_card(card: Tag, country_code: str) -> dict[str, Any]:
     """Extract product fields from an individual card/row element.
 
@@ -541,7 +714,7 @@ def parse_shopping_results(
         ``rating``, ``review_count``.
         Missing fields are set to ``None``.
     """
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "lxml")
     results: list[dict[str, Any]] = []
 
     # Try CSS-selector strategies in order of specificity.
@@ -550,6 +723,8 @@ def parse_shopping_results(
         _strategy_list,
         _strategy_docid,
         _strategy_generic_divs,
+        _strategy_rendered_shopping,
+        _strategy_aria_labels,
     ]
 
     for strategy in strategies:
@@ -597,7 +772,7 @@ def parse_price_comparison(
         ``currency``, ``total_price``, ``shipping``, ``store_link``,
         ``store_domain``, and ``condition``.
     """
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "lxml")
     results = _parse_comparison_sellers(soup, country_code)
     logger.info("Parsed %d sellers from price comparison page", len(results))
     return results

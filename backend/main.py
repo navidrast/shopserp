@@ -66,6 +66,12 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Shutdown
     _stop_scheduler()
+    try:
+        from backend.scraper.google_shopping import close_browser
+        await close_browser()
+        logger.info("Playwright browser closed")
+    except Exception:
+        pass
 
 
 # ── Application ──────────────────────────────────────────────────────────────
