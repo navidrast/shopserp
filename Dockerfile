@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS base
+FROM mcr.microsoft.com/playwright/python:v1.52.0-noble
 
 # Prevent Python from writing .pyc files and enable unbuffered output
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -6,25 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install dependencies in a separate layer for better caching
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install Playwright Chromium and its system dependencies
-RUN playwright install --with-deps chromium
-
-# Create non-root user
-RUN groupadd --gid 1000 appuser && \
-    useradd --uid 1000 --gid 1000 --create-home appuser
 
 # Copy application source code
 COPY . .
 
-# Create data directory and set ownership
-RUN mkdir -p /app/data && chown -R appuser:appuser /app
-
-# Switch to non-root user
-USER appuser
+# Create data directory
+RUN mkdir -p /app/data
 
 EXPOSE 8000
 
