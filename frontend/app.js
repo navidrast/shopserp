@@ -309,9 +309,10 @@
       var data = await api('POST', '/search', { query: query, countries: countries });
       state.searchResults = data;
       renderSearchResults(data);
-      showToast('Found results across ' + countries.length + ' countries', 'success');
-    } catch (_) {
-      // Error already shown by api()
+      showToast('Found ' + (data.total_results || 0) + ' results across ' + countries.length + ' countries', 'success');
+    } catch (err) {
+      console.error('Search/render error:', err);
+      showToast(err.message || 'Search failed', 'error');
     }
   }
 

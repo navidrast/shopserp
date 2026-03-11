@@ -51,12 +51,15 @@ async def search(
                 price=r["price"],
                 currency=r.get("currency", "USD"),
                 original_price=r.get("original_price"),
-                url=r.get("url", ""),
+                url=r.get("url") or r.get("store_link") or r.get("product_link") or "",
                 title=r.get("title", ""),
                 condition=r.get("condition"),
                 shipping=r.get("shipping"),
                 in_stock=r.get("in_stock", True),
                 is_reputable=r.get("is_reputable", False),
+                image_url=r.get("image_url"),
+                rating=r.get("rating"),
+                review_count=r.get("review_count"),
             )
             for r in items
             if r.get("price") is not None

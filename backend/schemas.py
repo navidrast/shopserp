@@ -118,6 +118,9 @@ class SearchResultItem(BaseModel):
     shipping: str | None = None
     in_stock: bool = True
     is_reputable: bool = False
+    image_url: str | None = None
+    rating: float | None = None
+    review_count: int | None = None
 
 
 class CountrySearchResults(BaseModel):
