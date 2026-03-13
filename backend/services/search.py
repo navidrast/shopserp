@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -117,6 +118,155 @@ class SearchService:
             sum(1 for r in tagged if r["is_reputable"]),
         )
         return tagged
+
+    # ── Structured search (v1 API) ────────────────────────────────────────────
+
+    @staticmethod
+    def build_search_queries(
+        *,
+        query: str | None = None,
+        upc: str | None = None,
+        part_number: str | None = None,
+        sku: str | None = None,
+        brand: str | None = None,
+        model: str | None = None,
+    ) -> list[str]:
+        """Build a prioritized list of search queries from structured fields.
+
+        Returns queries in cascade order — caller should try each until results
+        are found. UPC/EAN is the most precise, then MPN, then brand+model,
+        then free-text fallback.
+        """
+        queries: list[str] = []
+
+        if upc:
+            queries.append(upc)
+
+        if part_number:
+            prefix = f"{brand} " if brand else ""
+            queries.append(f"{prefix}{part_number}")
+
+        if brand and model:
+            queries.append(f"{brand} {model}")
+        elif model:
+            queries.append(model)
+
+        if query:
+            queries.append(query)
+
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique: list[str] = []
+        for q in queries:
+            q_lower = q.strip().lower()
+            if q_lower not in seen:
+                seen.add(q_lower)
+                unique.append(q.strip())
+        return unique
+
+    @staticmethod
+    def filter_results(
+        results: list[dict[str, Any]],
+        *,
+        brand: str | None = None,
+        model: str | None = None,
+        condition: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Post-filter search results by brand, model, and/or condition."""
+        filtered = results
+
+        if brand:
+            brand_lower = brand.lower()
+            filtered = [
+                r for r in filtered
+                if brand_lower in (r.get("title") or "").lower()
+                or brand_lower in (r.get("store_name") or "").lower()
+            ]
+
+        if model:
+            model_lower = model.lower()
+            # For model matching, normalize whitespace and allow flexible matching
+            model_tokens = model_lower.split()
+            filtered = [
+                r for r in filtered
+                if all(tok in (r.get("title") or "").lower() for tok in model_tokens)
+            ]
+
+        if condition and condition != "any":
+            cond_lower = condition.lower()
+            filtered = [
+                r for r in filtered
+                if (r.get("condition") or "").lower() == cond_lower
+                # Keep results with no condition info if filtering for "new"
+                # (most listings without explicit condition are new)
+                or (cond_lower == "new" and not r.get("condition"))
+            ]
+
+        return filtered
+
+    async def structured_search(
+        self,
+        db: AsyncSession,
+        *,
+        query: str | None = None,
+        upc: str | None = None,
+        part_number: str | None = None,
+        sku: str | None = None,
+        brand: str | None = None,
+        model: str | None = None,
+        condition: str | None = None,
+        countries: list[str],
+        max_results: int = 100,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Search with structured identifiers and cascading fallback.
+
+        Tries each query in priority order (UPC → MPN → brand+model → free text)
+        and returns the first set that yields results after filtering.
+        """
+        search_queries = self.build_search_queries(
+            query=query, upc=upc, part_number=part_number,
+            sku=sku, brand=brand, model=model,
+        )
+
+        if not search_queries:
+            logger.warning("No search terms provided")
+            return {}
+
+        for i, q in enumerate(search_queries):
+            logger.info(
+                "Structured search attempt %d/%d: query=%r",
+                i + 1, len(search_queries), q,
+            )
+            grouped = await self.search(
+                db=db, query=q, countries=countries, max_results=max_results,
+            )
+
+            # Apply post-filters
+            filtered_grouped: dict[str, list[dict[str, Any]]] = {}
+            total_filtered = 0
+            for cc, items in grouped.items():
+                filtered = self.filter_results(
+                    items, brand=brand, model=model, condition=condition,
+                )
+                filtered_grouped[cc] = filtered
+                total_filtered += len(filtered)
+
+            if total_filtered > 0:
+                logger.info(
+                    "Structured search succeeded on attempt %d: query=%r, %d results after filtering",
+                    i + 1, q, total_filtered,
+                )
+                return filtered_grouped
+
+            logger.info(
+                "Attempt %d yielded 0 results after filtering, trying next query",
+                i + 1,
+            )
+
+        # All queries exhausted — return unfiltered results from the last attempt
+        # as a best-effort fallback
+        logger.warning("All structured search queries exhausted, returning last unfiltered results")
+        return grouped if grouped else {}
 
     @staticmethod
     async def _search_serper(query: str, country_code: str, max_results: int) -> list[dict[str, Any]]:

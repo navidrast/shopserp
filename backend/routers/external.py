@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import require_api_key
@@ -16,7 +17,7 @@ from backend.database import get_db
 from backend.schemas import (
     CustomStoreCreate,
     CustomStoreResponse,
-    SearchRequest,
+    ExtendedSearchRequest,
     SearchResponse,
     StoreReputationResponse,
     CountrySearchResults,
@@ -53,20 +54,64 @@ _analytics_service = AnalyticsService()
 
 @router.post("/search", response_model=SearchResponse)
 async def search(
-    body: SearchRequest,
+    body: ExtendedSearchRequest,
     db: AsyncSession = Depends(get_db),
 ) -> SearchResponse:
-    """Search Google Shopping across one or more countries."""
+    """Search Google Shopping with structured product identifiers.
+
+    Supports UPC/EAN, manufacturer part number, brand/model filtering,
+    and condition filtering. Falls back through identifiers in priority
+    order: UPC → MPN → brand+model → free-text query.
+    """
+    has_structured = any([body.upc, body.part_number, body.brand, body.model])
+
     try:
-        grouped = await _search_service.search(
-            db=db,
-            query=body.query,
-            countries=body.countries,
-            max_results=body.max_results,
-        )
+        if has_structured:
+            grouped = await _search_service.structured_search(
+                db=db,
+                query=body.query,
+                upc=body.upc,
+                part_number=body.part_number,
+                sku=body.sku,
+                brand=body.brand,
+                model=body.model,
+                condition=body.condition,
+                countries=body.countries,
+                max_results=body.max_results,
+            )
+        else:
+            # Plain text search (original behavior)
+            if not body.query:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Provide 'query' or structured identifiers (upc, part_number, brand, model)",
+                )
+            grouped = await _search_service.search(
+                db=db,
+                query=body.query,
+                countries=body.countries,
+                max_results=body.max_results,
+            )
+            # Apply condition filter even for plain text search
+            if body.condition and body.condition != "any":
+                grouped = {
+                    cc: _search_service.filter_results(items, condition=body.condition)
+                    for cc, items in grouped.items()
+                }
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("v1 search failed for query=%r", body.query)
+        logger.exception("v1 search failed")
         raise HTTPException(status_code=502, detail=f"Search failed: {exc}") from exc
+
+    # Build the effective query string for the response
+    effective_query = body.query or body.upc or body.part_number or ""
+    if body.brand and body.model:
+        effective_query = f"{body.brand} {body.model}"
+    elif body.brand:
+        effective_query = body.brand
+    elif body.model:
+        effective_query = body.model
 
     country_results: list[CountrySearchResults] = []
     total = 0
@@ -105,7 +150,7 @@ async def search(
         total += len(result_items)
 
     return SearchResponse(
-        query=body.query,
+        query=effective_query,
         countries=country_results,
         total_results=total,
     )
@@ -209,9 +254,12 @@ async def delete_custom_store(
 # ── Monitors ──────────────────────────────────────────────────────────────────
 
 
-class _CreateMonitorV1(SearchRequest):
-    """Extends SearchRequest with name field for monitor creation."""
+class _CreateMonitorV1(BaseModel):
+    """Monitor creation request for v1 API."""
     name: str
+    query: str
+    countries: list[str] = Field(default_factory=lambda: ["US"])
+    max_results: int = Field(default=30, ge=1, le=100)
     interval_minutes: int = 360
 
 

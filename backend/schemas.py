@@ -106,6 +106,19 @@ class SearchRequest(BaseModel):
     max_results: int = Field(default=30, ge=1, le=100)
 
 
+class ExtendedSearchRequest(BaseModel):
+    """V1 search request with structured product identifiers."""
+    query: str | None = Field(default=None, max_length=1024)
+    upc: str | None = Field(default=None, max_length=64)
+    part_number: str | None = Field(default=None, max_length=128)
+    sku: str | None = Field(default=None, max_length=128)
+    brand: str | None = Field(default=None, max_length=256)
+    model: str | None = Field(default=None, max_length=256)
+    condition: Literal["new", "used", "refurbished", "any"] | None = None
+    countries: list[str] = Field(default_factory=lambda: ["US"])
+    max_results: int = Field(default=30, ge=1, le=100)
+
+
 class SearchResultItem(BaseModel):
     store_name: str
     store_domain: str
