@@ -77,7 +77,7 @@ async def list_api_keys() -> list[ApiKeyResponse]:
         return [ApiKeyResponse.model_validate(k) for k in keys]
 
 
-@router.delete("/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_api_key(key_id: int) -> None:
     """Permanently revoke and delete an API key."""
     async with async_session_factory() as session:
