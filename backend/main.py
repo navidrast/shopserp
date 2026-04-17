@@ -112,6 +112,7 @@ _router_modules = (
     ("backend.routers.monitors", "monitors"),
     ("backend.routers.analytics", "analytics"),
     ("backend.routers.settings_router", "settings_router"),
+    ("backend.routers.api_keys", "api_keys"),
 )
 
 for _module_path, _attr in _router_modules:

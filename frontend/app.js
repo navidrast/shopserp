@@ -1183,6 +1183,22 @@
         '</div>' +
       '</div>' +
 
+      // API Keys
+      '<div class="settings-section">' +
+        '<div class="settings-section-title">' +
+          '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>' +
+          'API Keys' +
+        '</div>' +
+        '<p class="text-sm text-secondary mb-12">Manage API keys for external integrations. Keys are used with the <code>X-API-Key</code> header.</p>' +
+        '<div class="mb-12">' +
+          '<button class="btn btn-primary btn-sm" id="generateKeyBtn">' +
+            '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+            'Generate New Key' +
+          '</button>' +
+        '</div>' +
+        '<div id="apiKeysTable"></div>' +
+      '</div>' +
+
       // Save
       '<div class="flex-between mt-20">' +
         '<button class="btn btn-secondary" id="settingsReset">Reset to Defaults</button>' +
@@ -1203,6 +1219,10 @@
     // Save
     document.getElementById('settingsSave').addEventListener('click', saveSettings);
     document.getElementById('settingsReset').addEventListener('click', resetSettings);
+
+    // API Keys
+    document.getElementById('generateKeyBtn').addEventListener('click', showGenerateKeyModal);
+    loadApiKeys();
   }
 
   async function saveSettings() {
@@ -1245,6 +1265,155 @@
     localStorage.setItem('shopserp-settings', JSON.stringify(state.settings));
     renderSettings();
     showToast('Settings reset to defaults', 'info');
+  }
+
+  // ───────────────────────────────────────────────
+  // API Key Management
+  // ───────────────────────────────────────────────
+
+  async function loadApiKeys() {
+    var container = document.getElementById('apiKeysTable');
+    if (!container) return;
+
+    try {
+      var keys = await api('GET', '/keys');
+      renderApiKeysTable(keys);
+    } catch (_) {
+      container.innerHTML = '<p class="text-sm text-secondary">Could not load API keys.</p>';
+    }
+  }
+
+  function renderApiKeysTable(keys) {
+    var container = document.getElementById('apiKeysTable');
+    if (!container) return;
+
+    if (!keys || keys.length === 0) {
+      container.innerHTML = '<p class="text-sm text-secondary">No API keys configured. Generate one to enable external API access.</p>';
+      return;
+    }
+
+    var rows = keys.map(function (k) {
+      var statusBadge = k.is_active
+        ? '<span class="badge badge-green">Active</span>'
+        : '<span class="badge badge-yellow">Inactive</span>';
+      var lastUsed = k.last_used_at ? relativeTime(k.last_used_at) : 'Never';
+      var created = new Date(k.created_at).toLocaleDateString();
+
+      return '<tr>' +
+        '<td>' + escapeHtml(k.name) + '</td>' +
+        '<td><code>' + escapeHtml(k.key_prefix) + '...</code></td>' +
+        '<td>' + statusBadge + '</td>' +
+        '<td>' + lastUsed + '</td>' +
+        '<td>' + created + '</td>' +
+        '<td>' +
+          '<button class="btn btn-sm btn-ghost apikey-toggle-btn" data-id="' + k.id + '" title="' + (k.is_active ? 'Deactivate' : 'Activate') + '">' +
+            (k.is_active ? 'Disable' : 'Enable') +
+          '</button>' +
+          '<button class="btn btn-sm btn-danger apikey-delete-btn" data-id="' + k.id + '" data-name="' + escapeHtml(k.name) + '" title="Revoke key">' +
+            'Revoke' +
+          '</button>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    container.innerHTML = '<div class="table-wrap"><table class="table">' +
+      '<thead><tr><th>Name</th><th>Key</th><th>Status</th><th>Last Used</th><th>Created</th><th>Actions</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table></div>';
+
+    // Bind toggle buttons
+    container.querySelectorAll('.apikey-toggle-btn').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        try {
+          await api('PATCH', '/keys/' + btn.getAttribute('data-id'));
+          showToast('API key updated', 'success');
+          loadApiKeys();
+        } catch (_) { /* handled */ }
+      });
+    });
+
+    // Bind delete buttons
+    container.querySelectorAll('.apikey-delete-btn').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        var name = btn.getAttribute('data-name');
+        if (!confirm('Revoke API key "' + name + '"? Any integration using this key will stop working.')) return;
+        try {
+          await api('DELETE', '/keys/' + btn.getAttribute('data-id'));
+          showToast('API key revoked', 'success');
+          loadApiKeys();
+        } catch (_) { /* handled */ }
+      });
+    });
+  }
+
+  function showGenerateKeyModal() {
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = '<div class="modal">' +
+      '<div class="modal-header">' +
+        '<h3 class="modal-title">Generate New API Key</h3>' +
+        '<button class="modal-close">&times;</button>' +
+      '</div>' +
+      '<div id="generateKeyForm">' +
+        '<div class="form-group">' +
+          '<label class="form-label">Key Name</label>' +
+          '<input type="text" class="form-input" id="newKeyName" placeholder="e.g. ReturnPilot Production">' +
+          '<p class="text-xs text-secondary mt-4">A descriptive name to identify this key.</p>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="btn btn-secondary modal-cancel">Cancel</button>' +
+          '<button class="btn btn-primary" id="modalGenerateBtn">Generate Key</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="generateKeyResult" style="display:none">' +
+        '<div class="form-group">' +
+          '<label class="form-label">Your New API Key</label>' +
+          '<div style="display:flex;gap:8px;align-items:center">' +
+            '<input type="text" class="form-input" id="newKeyValue" readonly style="font-family:monospace;font-size:13px">' +
+            '<button class="btn btn-sm btn-secondary" id="copyKeyBtn" title="Copy to clipboard">Copy</button>' +
+          '</div>' +
+          '<p class="text-xs mt-8" style="color:var(--yellow-text)">This key will only be shown once. Copy it now and store it securely.</p>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="btn btn-primary modal-done">Done</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+    document.body.appendChild(overlay);
+
+    var closeModal = function () { document.body.removeChild(overlay); };
+    overlay.querySelector('.modal-close').addEventListener('click', closeModal);
+    overlay.querySelector('.modal-cancel').addEventListener('click', closeModal);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(); });
+
+    document.getElementById('modalGenerateBtn').addEventListener('click', async function () {
+      var name = document.getElementById('newKeyName').value.trim();
+      if (!name) { showToast('Enter a name for the key', 'warning'); return; }
+
+      try {
+        var data = await api('POST', '/keys', { name: name });
+        // Show the key
+        document.getElementById('generateKeyForm').style.display = 'none';
+        document.getElementById('generateKeyResult').style.display = 'block';
+        document.getElementById('newKeyValue').value = data.key;
+
+        document.getElementById('copyKeyBtn').addEventListener('click', function () {
+          navigator.clipboard.writeText(data.key).then(function () {
+            showToast('Key copied to clipboard', 'success');
+          }).catch(function () {
+            // Fallback: select the input
+            document.getElementById('newKeyValue').select();
+            showToast('Press Ctrl+C to copy', 'info');
+          });
+        });
+
+        overlay.querySelector('.modal-done').addEventListener('click', function () {
+          closeModal();
+          loadApiKeys();
+        });
+      } catch (_) { /* handled by api() */ }
+    });
   }
 
   // ───────────────────────────────────────────────

@@ -146,6 +146,25 @@ class PriceAlert(Base):
         return f"<PriceAlert id={self.id} type={self.alert_type!r}>"
 
 
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<ApiKey id={self.id} name={self.name!r} prefix={self.key_prefix!r}>"
+
+
 class CustomStore(Base):
     __tablename__ = "custom_stores"
 

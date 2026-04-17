@@ -210,6 +210,32 @@ class CountryConfig(BaseModel):
     popular_stores: list[str] = Field(default_factory=list)
 
 
+# ─── API Keys ───────────────────────────────────────────────────────────────
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+
+
+class ApiKeyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    key_prefix: str
+    is_active: bool
+    last_used_at: datetime | None = None
+    created_at: datetime
+
+
+class ApiKeyCreatedResponse(BaseModel):
+    id: int
+    name: str
+    key: str
+    key_prefix: str
+    created_at: datetime
+
+
 # ─── Generic ─────────────────────────────────────────────────────────────────
 
 
